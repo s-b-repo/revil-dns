@@ -64,7 +64,6 @@ Usage
     Run the Program:
         Once compiled, run the executable:
 
-        bash
 
         ./rens.exe
 

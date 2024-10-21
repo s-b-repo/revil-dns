@@ -2,78 +2,68 @@
 a sliver c2 payload for connecting to the c2 using dns and obfuscation written in c 
 
 
-# Encrypted TCP Communication with DNS-like Obfuscation
+important details:
 
-This project demonstrates a technique to obfuscate TCP traffic by embedding HTTP requests into DNS-like queries and encrypting the communication using SSL/TLS. The project is intended for educational and research purposes, and only to be used in ethical penetration testing or network analysis environments.
+# DNS-based C2 Over SSL
 
-**Note**: Ensure you have proper authorization before running this code in any environment. Unauthorized use of this technique could violate local laws.
+This project implements a covert Command & Control (C2) client that communicates over DNS (port 53) using SSL encryption. The DNS traffic is obfuscated to resemble legitimate DNS queries while actually relaying commands and responses between the infected host and the C2 server. This approach helps evade detection by traditional firewalls and network intrusion detection systems (IDS).
 
 ## Features
 
-- Mimics DNS queries and embeds HTTP requests within the DNS payload.
-- Random data is added for obfuscation to evade basic pattern matching.
-- Uses OpenSSL to encrypt TCP traffic between the client and the C2 server.
-- Communicates over port 53 (commonly used for DNS traffic), disguising the true intent of the communication.
+- **DNS disguise:** The communication between the client and the C2 server is disguised as DNS queries over port 53.
+- **SSL encryption:** Data transfer between the client and server is encrypted using SSL, adding an extra layer of security.
+- **Remote command execution:** The C2 client can execute remote commands on the infected machine, such as:
+  - Change directory (`cd`)
+  - Get current directory (`pwd`)
+  - List installed applications
+  - Keylogging for a specified duration
+  - Execute system commands via `cmd`
+- **Randomized sleep:** Polymorphic behavior is achieved through random sleep intervals to avoid detection by behavioral analysis tools.
 
 ## Requirements
 
-- **Windows**: The code uses Winsock2 for network communication, which is specific to Windows.
-- **OpenSSL**: The OpenSSL library is required to provide SSL/TLS encryption for the TCP connection.
-- **C2 Server**: The IP address of the C2 server must be provided. For testing purposes, you can set up a server to simulate the communication.
+- Windows OS
+- Visual Studio or other compatible C/C++ compiler
+- OpenSSL for SSL/TLS support
 
-## Installation
+## Setup Instructions
 
-1. **Install OpenSSL**:
-   - Download and install OpenSSL from the [OpenSSL website](https://www.openssl.org/source/).
-   - Ensure OpenSSL libraries and headers are properly configured in your system's include path.
+1. **Install OpenSSL:**
+   - Download and install OpenSSL from [here](https://www.openssl.org/).
+   - Ensure the OpenSSL library is linked properly with your project.
 
-2. **Clone this repository**:
+2. **Compile the code:**
+   - Ensure you have a C compiler installed (like GCC or MSVC).
+   - Link the necessary libraries (e.g., `ws2_32.lib`, `libssl.lib`, `libcrypto.lib`).
+   - Compile the code by running the following commands (adapt to your environment):
+     ```
+     gcc -o dns_c2_client dns_c2_client.c -lssl -lcrypto -lws2_32
+     ```
 
-   
-   git clone https://github.com/s-b-repo/revil-dns.git
-   cd revil-dns
+3. **Configure the C2 server:**
+   - Replace the `C2_SERVER_IP` in the code with the IP address of your actual C2 server.
 
-    Install Dependencies:
-        For Windows, install any dependencies required for Winsock and OpenSSL development.
-        Ensure your compiler can link against the ws2_32.lib (for Winsock) and OpenSSL libraries.
+4. **Run the executable:**
 
-Building
-Using GCC (MinGW)
+./dns_c2_client.exe
 
-If you are using GCC with MinGW on Windows:
+## How It Works
 
-    Open a terminal in the project directory.
-    Compile the program using:
+1. The client initiates communication over TCP port 53, disguising traffic as DNS queries.
+2. The C2 server responds with commands, which are executed on the infected machine.
+3. Results from the executed commands are sent back to the C2 server over the same disguised channel.
+4. All communication is encrypted using SSL to ensure data confidentiality.
 
-    bash
+### Commands Supported
 
-    gcc -o rens.exe main.c -lws2_32 -lssl -lcrypto
+- `CD <path>`: Changes the working directory to the specified path.
+- `PWD`: Returns the current working directory.
+- `LIST_APPS`: Lists all installed applications on the system.
+- `KEYLOG <duration>`: Captures keystrokes for the specified duration (in seconds).
+- `CMD <command>`: Executes a system command and sends the output to the C2 server.
 
-Replace main.c with the actual name of the file containing your code.
-Using Visual Studio
+## Disclaimer
 
-    Open the project in Visual Studio.
-    Add the necessary include paths for Winsock and OpenSSL in the project settings.
-    Build the project using Ctrl+Shift+B.
-
-Usage
-
-    Set the C2 Server IP:
-        Open main.c and replace the placeholder C2_SERVER_IP with the actual IP address of the C2 server or a testing environment.
-
-    Run the Program:
-        Once compiled, run the executable:
-
-
-        ./rens.exe
-
-    Output:
-        The program will:
-            Initialize Winsock and OpenSSL.
-            Connect to the C2 server over port 53 using encrypted TCP traffic.
-            Send a DNS-like query with embedded HTTP requests.
-            Receive a disguised response from the C2 server.
-
-Disclaimer
+**This project is for educational and research purposes only.**
 
 This project is for educational purposes only. Do not use this code for any illegal activity, unauthorized network penetration, or without proper permission. Always ensure you are compliant with local laws and have the necessary authorization before executing any penetration tests or obfuscated traffic generation in a network environment.

